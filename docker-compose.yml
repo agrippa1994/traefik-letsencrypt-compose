@@ -3,7 +3,7 @@ services:
 
   traefik:
     image: traefik:3.0
-    restart: always
+    restart: unless-stopped
     command:
       # Try to enable this if something isn't working.
       # Chances are, Traefik will tell you why.
@@ -14,6 +14,10 @@ services:
       - --entrypoints.web.http.redirections.entryPoint.to=websecure
       - --entrypoints.web.http.redirections.entryPoint.scheme=https
       - --entrypoints.websecure.address=:443
+      - --entryPoints.metrics.address=:8082
+
+      - --metrics.prometheus=true
+      - --metrics.prometheus.manualrouting=true
 
       - --providers.docker=true
       - --api=true
@@ -28,22 +32,57 @@ services:
     labels:
       - traefik.http.routers.dashboard.rule=Host(`traefik.${DOMAIN}`)
       - traefik.http.routers.dashboard.entrypoints=websecure
-      - traefik.http.routers.dashboard.middlewares=auth
+      - traefik.http.routers.dashboard.middlewares=dashboardauth
       - traefik.http.routers.dashboard.service=api@internal
       - traefik.http.routers.dashboard.tls=true
       - traefik.http.routers.dashboard.tls.certresolver=${CERT_RESOLVER}
       - traefik.http.services.api-svc.loadbalancer.server.port=3000
 
-      - traefik.http.middlewares.auth.basicauth.users=${TRAEFIK_USER}:${TRAEFIK_PASSWORD_HASH}
+      - traefik.http.routers.prometheus.rule=PathPrefix(`/`)
+      - traefik.http.routers.prometheus.entrypoints=metrics
+      - traefik.http.routers.prometheus.middlewares=prometheusauth
+      - traefik.http.routers.prometheus.service=prometheus@internal
+
+      - traefik.http.middlewares.dashboardauth.basicauth.users=${TRAEFIK_USER}:${TRAEFIK_PASSWORD_HASH}
+      - traefik.http.middlewares.prometheusauth.basicauth.users=${PROMETHEUS_USER}:${PROMETHEUS_PASSWORD_HASH}
     network_mode: "host"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./data/letsencrypt:/letsencrypt
       - /var/run/docker.sock:/var/run/docker.sock:ro
 
   whoami:
     image: containous/whoami
+    restart: unless-stopped
     labels:
       - traefik.http.routers.whoami.rule=Host(`whoami.${DOMAIN}`)
       - traefik.http.routers.whoami.entrypoints=websecure
       - traefik.http.routers.whoami.tls=true
       - traefik.http.routers.whoami.tls.certresolver=${CERT_RESOLVER}
+
+  prometheus:
+    image: bitnami/prometheus:2.41.0
+    restart: unless-stopped
+    volumes:
+      - prometheus:/opt/bitnami/prometheus/data
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    extra_hosts:
+    - "host.docker.internal:host-gateway"
+
+  grafana:
+    image: grafana/grafana-oss:9.3.2
+    restart: unless-stopped
+    volumes:
+      - grafana:/var/lib/grafana
+    labels:
+      - traefik.http.routers.grafana.rule=Host(`grafana.${DOMAIN}`)
+      - traefik.http.routers.grafana.entrypoints=websecure
+      - traefik.http.routers.grafana.tls=true
+      - traefik.http.routers.grafana.tls.certresolver=letsencrypt
+      - traefik.http.routers.grafana.service=grafana
+      - traefik.http.services.grafana.loadbalancer.server.port=3000
+
+volumes:
+  grafana:
+  prometheus:
